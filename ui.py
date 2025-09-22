@@ -1,3 +1,6 @@
+import token
+from datetime import timedelta, datetime
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -87,38 +90,11 @@ if st.session_state.token:
         else:
             st.info("No trades yet")
 
-    # ----- Display Trades by Instrument Type -----
-    st.subheader("Trades by Instrument Type")
-    if df_trades is not None and not df_trades.empty:
-        instrument_types = df_trades['instrument_type'].unique()
-        selected_instrument_type = st.selectbox(
-            "Select Instrument Type",
-            options=['All'] + list(instrument_types),
-            index=0
-        )
-
-        if selected_instrument_type == 'All':
-            st.dataframe(df_trades)
-        else:
-            response = api_get(f"/users/me/trades/{selected_instrument_type}")
-            if response.status_code == 200:
-                trades_by_type = response.json()
-                if trades_by_type:
-                    df_trades_by_type = pd.DataFrame(trades_by_type)
-                    st.dataframe(df_trades_by_type)
-                else:
-                    st.info(f"No trades found for instrument type: {selected_instrument_type}")
-            else:
-                st.error(f"Failed to fetch trades for instrument type: {selected_instrument_type}")
-    else:
-        st.info("No trades available to filter by instrument type")
-
     # ----- Display Historical Prices, Time Series & Returns -----
     st.subheader("Historical Prices, Time Series & Returns")
     if df_trades is not None:
         tickers = df_trades['instrument_name'].unique()
         for ticker in tickers:
-            # Skip derivatives (e.g., those with "CALL" or "PUT")
             upper_ticker = ticker.upper()
             is_deriv = any(word in upper_ticker for word in ["CALL", "PUT"])
             if is_deriv:
@@ -126,7 +102,6 @@ if st.session_state.token:
 
             st.markdown(f"**Position: {ticker}**")
 
-            # Fetch and display historical prices for non-derivative
             underlying = ticker.replace("/", "_")
             response = api_get(f"/historical/{underlying}")
             if response.status_code == 200:
@@ -152,7 +127,6 @@ if st.session_state.token:
             else:
                 st.info(f"No historical data for {ticker}")
 
-            # Fetch and display returns for non-derivative
             response = api_get(f"/users/me/returns/{ticker.replace("/", "_")}")
             if response.status_code == 200:
                 returns = response.json()
@@ -191,32 +165,122 @@ if st.session_state.token:
                 except:
                     st.error(f"Failed to fetch returns for {ticker}")
 
-    # ----- Portfolio Returns -----
-    st.subheader("Portfolio Weighted Returns")
-    response = api_get("/users/me/portfolio_returns")
-    if response.status_code == 200:
-        data = response.json()
-        excluded = data.get('excluded_tickers', [])
-        if excluded:
-            st.warning(f"Excluded underlyings (invalid data): {', '.join(excluded)}")
+        # ----- Portfolio Returns -----
+        st.subheader("Portfolio Weighted Returns")
+        response = api_get("/users/me/portfolio_returns")
+        if response.status_code == 200:
+            data = response.json()
+            excluded = data.get('excluded_tickers', [])
+            if excluded:
+                st.warning("Excluded underlyings (invalid data):")
+                for exc in excluded:
+                    st.write(exc)
+                    if st.button(f"Extract from Yahoo Finance for {exc}"):
+                        response_fetch = api_post(f"/historical/fetch_yahoo/{exc}")
+                        if response_fetch.status_code == 200:
+                            st.success(
+                                f"Data fetched and upserted for {exc}: Inserted {response_fetch.json()['inserted']}, Updated {response_fetch.json()['updated']}")
+                        else:
+                            st.error(
+                                f"Failed to fetch for {exc}: {response_fetch.json().get('detail', 'Unknown error')}")
+            else:
+                st.info("All underlyings have valid data")
+
+            portfolio_returns = data.get('portfolio_returns', [])
+            if portfolio_returns:
+                df_port = pd.DataFrame(portfolio_returns)
+                df_port['date'] = pd.to_datetime(df_port['date'])
+
+                fig_port = px.line(
+                    df_port,
+                    x='date',
+                    y='weighted_return',
+                    labels={'weighted_return': 'Weighted Daily Return'},
+                    title="Portfolio Weighted Returns Over Time"
+                )
+                st.plotly_chart(fig_port, use_container_width=True)
+            else:
+                st.info("No portfolio returns computed (check data validity)")
         else:
-            st.info("All underlyings have valid data")
+            st.error("Failed to fetch portfolio returns")
 
-        portfolio_returns = data.get('portfolio_returns', [])
-        if portfolio_returns:
-            df_port = pd.DataFrame(portfolio_returns)
-            df_port['date'] = pd.to_datetime(df_port['date'])
+## ----- LSTM Prediction -----
+    st.subheader("LSTM Prediction on Portfolio Returns")
+    if st.button("Train and Predict with LSTM"):
+        url = f"/users/me/train_lstm"
+        response = api_post(url)
+        print(f"Request URL: {API_URL}{url}, Status: {response.status_code}, Text: {response.text}")  # Debug print
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                predictions = result["predictions"]
+                st.success(f"Model {'trained' if result['model_status'] == 'trained' else 'loaded'} successfully")
+                st.write("Predicted Returns for Next 14 Days:")
+                # Get historical returns for plotting
+                hist_response = api_get("/users/me/portfolio_returns")
+                if hist_response.status_code == 200:
+                    hist_data = hist_response.json()
+                    hist_returns = [item['weighted_return'] for item in hist_data.get('portfolio_returns', [])]
+                    hist_dates = [datetime.strptime(item['date'], '%Y-%m-%d') for item in hist_data.get('portfolio_returns', [])]
+                    if hist_dates:
+                        last_date = hist_dates[-1]
+                        pred_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(len(predictions))]
+                        # Combine historical and predicted
+                        all_dates = [d.strftime('%Y-%m-%d') for d in hist_dates] + pred_dates
+                        all_returns = hist_returns + predictions
+                        df_plot = pd.DataFrame({
+                            'date': all_dates,
+                            'returns': all_returns,
+                            'type': ['Historical'] * len(hist_returns) + ['Predicted'] * len(predictions)
+                        })
+                        df_plot['date'] = pd.to_datetime(df_plot['date'])
+                        fig = px.line(df_plot, x='date', y='returns', color='type', title="Historical and Predicted Portfolio Returns")
+                        st.plotly_chart(fig)
+                    else:
+                        st.dataframe(pd.DataFrame({'predicted_returns': predictions}))
+                else:
+                    st.error("Failed to fetch historical returns for plotting")
+            except ValueError as e:
+                st.error(f"Failed to parse response: {str(e)} - Raw response: {response.text}")
+        else:
+            st.error(f"Failed to train/predict: {response.text if not response.text else 'Unknown error'} - Status: {response.status_code}")
 
-            # Plot portfolio returns
-            fig_port = px.line(
-                df_port,
+    st.subheader("Historical Value at Risk (VaR) Over Time")
+    response_var = api_get("/users/me/historical_var")
+    if response_var.status_code == 200:
+        var_data = response_var.json()
+        if var_data:
+            df_var = pd.DataFrame(var_data)
+            df_var['date'] = pd.to_datetime(df_var['date'])
+            fig_var = px.line(
+                df_var,
                 x='date',
-                y='weighted_return',
-                labels={'weighted_return': 'Weighted Daily Return'},
-                title="Portfolio Weighted Returns Over Time"
+                y='var',
+                title="Historical VaR (95% Confidence, 250-Day Lookback)"
             )
-            st.plotly_chart(fig_port, use_container_width=True)
+            st.plotly_chart(fig_var, use_container_width=True)
         else:
-            st.info("No portfolio returns computed (check data validity)")
+            st.info("No VaR data available (insufficient returns)")
     else:
-        st.error("Failed to fetch portfolio returns")
+        st.error(f"Failed to fetch VaR: {response_var.json().get('detail', 'Unknown error')}")
+
+# ----- Parametric VaR -----
+    st.subheader("Parametric Value at Risk (VaR) Over Time")
+    response_param_var = api_get("/users/me/parametric_var")
+    if response_param_var.status_code == 200:
+        param_var_data = response_param_var.json()
+        if param_var_data:
+            df_param_var = pd.DataFrame(param_var_data)
+            df_param_var['date'] = pd.to_datetime(df_param_var['date'])
+            fig_param_var = px.line(
+                df_param_var,
+                x='date',
+                y='var',
+                title="Parametric VaR (95% Confidence, 250-Day Lookback, Normal Distribution)"
+            )
+            st.plotly_chart(fig_param_var, use_container_width=True)
+        else:
+            st.info("No Parametric VaR data available (insufficient or invalid returns)")
+    else:
+        st.error(f"Failed to fetch Parametric VaR: {response_param_var.json().get('detail', 'Unknown error')}")
+

@@ -1,3 +1,4 @@
+import numpy as np
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Path
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -11,7 +12,8 @@ from crud.crud import (
     create_user, authenticate_user, get_user,
     get_trades, bulk_upsert_trades,
     bulk_upsert_historical_prices, get_historical_prices,
-    update_historical_prices, delete_historical_prices, get_ticker_returns, get_portfolio_weighted_returns
+    delete_historical_prices, get_ticker_returns, get_portfolio_weighted_returns,
+    fetch_yahoo_historical, logger, train_lstm_model, predict_lstm_returns, parse_trades_file
 )
 from models.models import Trade, HistoricalPrice
 from schemas.schemas import UserCreate, UserOut, TradeOut, HistoricalPriceOut
@@ -246,3 +248,152 @@ def get_portfolio_returns_endpoint(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@router.post("/historical/fetch_yahoo/{ticker}")
+def fetch_yahoo_endpoint(
+    ticker: str = Path(..., description="The ticker to fetch from Yahoo Finance"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Fetch and upsert historical data from Yahoo Finance for the given ticker within the existing date range.
+    """
+    try:
+        result = fetch_yahoo_historical(db, ticker)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.post("/users/me/train_lstm")
+def train_lstm_endpoint(
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
+):
+    """
+    Train an LSTM model on the user's portfolio returns and predict future returns for 14 periods.
+    """
+    if not current_user.portfolio:
+        logger.error("No portfolio found for user")
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        portfolio_data = get_portfolio_weighted_returns(db, current_user.portfolio.id)
+        returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
+        logger.info(f"Raw returns data for user {current_user.username}: {returns}")
+
+        if not returns or len(returns) < 11:
+            logger.error(f"Insufficient portfolio returns data: {len(returns)} days")
+            raise HTTPException(status_code=400, detail="Insufficient portfolio returns data (need at least 11 days)")
+
+        result = train_lstm_model(db, current_user.username, returns)
+        model, mean, std = result["model"], result["mean"], result["std"]
+        logger.info(f"Model type passed to prediction: {type(model)}")
+
+        last_sequence = np.array(returns[-10:], dtype=np.float32)
+        predictions = predict_lstm_returns(model, last_sequence, 60, mean, std)
+
+        return {
+            "status": "success",
+            "predictions": (predictions),
+            "model_status": result["status"]
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error in train_lstm_endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+from crud.crud import get_historical_var
+
+
+@router.get("/users/me/historical_var", response_model=List[Dict[str, Any]])
+def get_historical_var_endpoint(
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
+):
+    """
+    Get historical VaR for the current user's portfolio returns.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        var_data = get_historical_var(db, current_user.portfolio.id)
+        return var_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+from crud.crud import get_parametric_var
+
+
+@router.get("/users/me/parametric_var", response_model=List[Dict[str, Any]])
+def get_parametric_var_endpoint(
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
+):
+    """
+    Get parametric VaR for the current user's portfolio returns.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        var_data = get_parametric_var(db, current_user.portfolio.id)
+        return var_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+
+from fastapi import UploadFile, File
+
+@router.post("/users/me/trades/upload_json_xml")
+def upload_json_xml_trades(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Upload JSON or XML file to add trades to the portfolio with validations.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    content = file.file.read().decode("utf-8")
+    file_type = file.filename.split('.')[-1].lower()
+    if file_type not in ['json', 'xml']:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Must be .json or .xml")
+
+    try:
+        trades_data = parse_trades_file(content, file_type)
+        result = bulk_upsert_trades(db, current_user.portfolio.id, trades_data)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/users/me/historical_data/{ticker}")
+def delete_historical_data_endpoint(
+        ticker: str,
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
+):
+    """
+    Delete historical data for a specific ticker.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        result = delete_historical_data_by_ticker(db, ticker)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")

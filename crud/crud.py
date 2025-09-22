@@ -1,10 +1,19 @@
 import logging
+import os
+import pickle
 from collections import defaultdict
+
+import numpy as np
+import yfinance
+from keras import Sequential, Input, Model
+from keras.src.layers import LSTM, Dropout, Dense
+from scipy.stats import norm
+from sqlalchemy import func
 
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
-from datetime import date
+from datetime import date, datetime
 
 from models.models import HistoricalPrice, Trade, User, Portfolio
 
@@ -286,9 +295,16 @@ def get_ticker_returns(db: Session, portfolio_id: int, ticker: str) -> List[floa
 logger = logging.getLogger(__name__)
 
 
+from sqlalchemy import func
+from collections import defaultdict
+from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
+
 def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, Any]:
     """
-    Calculate weighted portfolio returns based on valid underlyings.
+    Calculate weighted portfolio log returns based on valid underlyings.
 
     A position is valid if its underlying:
     - Has historical data.
@@ -303,7 +319,7 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
     Returns:
         {
             'excluded_tickers': List[str],  # Invalid underlyings
-            'portfolio_returns': List[Dict[str, Any]]  # [{'date': str, 'weighted_return': float}, ...]
+            'portfolio_returns': List[Dict[str, Any]]  # [{'date': str, 'weighted_return': float, 'instrument': str}, ...]
         }
     """
     trades = get_trades(db, portfolio_id)
@@ -327,11 +343,13 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
         prices = get_historical_prices(db, underlying)
         if not prices:
             excluded_underlyings.append(underlying)
+            logger.warning(f"No historical data for underlying: {underlying}")
             continue
 
         has_current_year = any(p.date.year == current_year for p in prices)
         if not has_current_year:
             excluded_underlyings.append(underlying)
+            logger.warning(f"No current year data for underlying: {underlying}")
             continue
 
         prices.sort(key=lambda p: p.date)
@@ -345,11 +363,13 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
                 break
         if not gap_ok:
             excluded_underlyings.append(underlying)
+            logger.warning(f"Gap > 10 days found for underlying: {underlying}")
             continue
 
         span_days = (prices[-1].date - prices[0].date).days
         if span_days < 365:
             excluded_underlyings.append(underlying)
+            logger.warning(f"Data span < 365 days for underlying: {underlying}")
             continue
 
         valid_underlyings.append(underlying)
@@ -365,6 +385,7 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
             total_mv += trade.market_value or 0.0
 
     if total_mv == 0:
+        logger.warning("Total market value is zero, no returns calculated")
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
 
     effective_weights = {}
@@ -406,16 +427,17 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
             if prev_close is None or curr_close is None or prev_close == 0:
                 all_have_data = False
                 break
-            ret = (curr_close - prev_close) / prev_close
+            ret = np.log(curr_close / prev_close)
             weighted_ret += weight * ret
 
         if all_have_data:
             portfolio_returns.append({
                 'date': curr_date.strftime('%Y-%m-%d'),
-                'weighted_return': float(weighted_ret)
+                'weighted_return': float(weighted_ret),
+                'instrument': next(iter(prices_by_underlying[underlying]))[0].strftime('%Y-%m-%d')  # Placeholder, adjust if needed
             })
 
-    logger.info(f"Computed {len(portfolio_returns)} portfolio return periods")
+    logger.info(f"Computed {len(portfolio_returns)} portfolio log return periods with instruments")
     return {
         'excluded_tickers': excluded_underlyings,
         'portfolio_returns': portfolio_returns
@@ -438,3 +460,330 @@ def get_trades_by_instrument_type(db: Session, portfolio_id: int, instrument_typ
         Trade.portfolio_id == portfolio_id,
         Trade.instrument_type == instrument_type
     ).all()
+
+
+
+
+def get_global_date_range(db: Session) -> tuple[Optional[date], Optional[date]]:
+    """Get the global min and max date from all historical prices."""
+    min_date = db.query(func.min(HistoricalPrice.date)).scalar()
+    max_date = db.query(func.max(HistoricalPrice.date)).scalar()
+    return min_date, max_date
+
+
+
+
+# Existing get_global_date_range function remains unchanged
+
+def fetch_yahoo_historical(db: Session, ticker: str) -> Dict[str, int]:
+    """Fetch historical data from Yahoo Finance using yfinance for the ticker within the global date range and upsert."""
+    min_date, max_date = get_global_date_range(db)
+    if not min_date or not max_date:
+        raise ValueError("No existing historical data in the database to determine date range")
+
+    # Limit end date to today
+    end_date = min(max_date, date.today())
+    try:
+        # Fetch data using yfinance
+        data = yfinance.download(ticker, start=min_date, end=end_date)
+        if data.empty:
+            raise ValueError(f"No data fetched from Yahoo Finance for {ticker}")
+    except Exception as e:
+        raise ValueError(f"Failed to fetch data from Yahoo Finance for {ticker}: {str(e)}")
+
+    rows = []
+    for index, row in data.iterrows():
+        rows.append({
+            "instrument": ticker,
+            "date": index.date(),
+            "open": float(row['Open']),
+            "high": float(row['High']),
+            "low": float(row['Low']),
+            "close": float(row['Close'])
+        })
+
+    result = bulk_upsert_historical_prices(db, rows)
+    logger.info(f"Upserted data for {ticker}: Inserted {result['inserted']}, Updated {result['updated']}")
+    return result
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
+import pickle
+import os
+import logging
+
+# Cache directory for user-specific models
+CACHE_DIR = "./lstm_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def get_lstm_model_cache_path(username: str) -> str:
+    """Generate cache file path for the user's LSTM model."""
+    return os.path.join(CACHE_DIR, f"{username}_lstm_model.pkl")
+
+
+def prepare_lstm_data(returns: List[float], look_back: int = 100) -> tuple:
+    """Prepare and normalize data for LSTM training."""
+    if not returns or len(returns) < look_back + 1:
+        logger.error(f"Insufficient returns data: {len(returns)} entries")
+        raise ValueError(f"Insufficient data for training (need at least {look_back + 1} days)")
+    data = np.array(returns, dtype=np.float32)
+    logger.info(f"Raw returns data: {data}")
+    mean = np.mean(data)
+    std = np.std(data) if np.std(data) > 0 else 1e-6  # Avoid division by zero
+    data = (data - mean) / std
+    logger.info(f"Normalized data stats - Mean: {mean}, Std: {std}")
+    X, y = [], []
+    for i in range(len(data) - look_back):
+        X.append(data[i:(i + look_back)])
+        y.append(data[i + look_back])
+    return np.array(X), np.array(y), mean, std
+
+
+def train_lstm_model(db: Session, username: str, returns: List[float]) -> Dict[str, Any]:
+    """Train an LSTM model on portfolio returns and cache it."""
+    cache_path = get_lstm_model_cache_path(username)
+
+    if os.path.exists(cache_path):
+        with open(cache_path, 'rb') as f:
+            model_data = pickle.load(f)
+            model, mean, std = model_data["model"], model_data["mean"], model_data["std"]
+        logger.info(f"Loaded cached model for user {username}")
+        return {"status": "loaded", "model": model, "mean": mean, "std": std}
+
+    look_back = 10
+    try:
+        X, y, mean, std = prepare_lstm_data(returns, look_back)
+        X = X.reshape((X.shape[0], look_back, 1))
+        logger.info(f"Training data shape - X: {X.shape}, y: {y.shape}")
+    except ValueError as e:
+        logger.error(f"Data preparation failed: {str(e)}")
+        raise
+
+    # Define model using Functional API (no Sequential)
+    inputs = Input(shape=(look_back, 1))
+    x = LSTM(50, return_sequences=True)(inputs)
+    x = Dropout(0.2)(x)
+    x = LSTM(50)(x)
+    x = Dropout(0.2)(x)
+    outputs = Dense(1)(x)
+    model = Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer='adam', loss='mse')
+
+    try:
+        model.fit(X, y.reshape(-1, 1), epochs=100, batch_size=32, verbose=0)
+        logger.info("Model training completed successfully")
+    except Exception as e:
+        logger.error(f"Model training failed: {str(e)}")
+        raise
+
+    with open(cache_path, 'wb') as f:
+        pickle.dump({"model": model, "mean": mean, "std": std}, f)
+    logger.info(f"Model cached at {cache_path}")
+
+    return {"status": "trained", "model": model, "mean": mean, "std": std}
+
+
+# Replace the existing predict_lstm_returns function in crud.py
+def predict_lstm_returns(model: Model, last_sequence: np.ndarray, periods: int, mean: float, std: float) -> List[float]:
+    """Predict normalized returns for the next N periods using a step-by-step approach with explicit tensor handling."""
+    if len(last_sequence) != 10:
+        logger.error(f"Invalid last_sequence length: {len(last_sequence)}")
+        raise ValueError("Last sequence must have 10 values")
+    last_sequence = np.array(last_sequence, dtype=np.float32)
+    logger.info(f"Last sequence for prediction (raw): {last_sequence}")
+    last_sequence = (last_sequence - mean) / std
+    logger.info(f"Last sequence for prediction (normalized): {last_sequence}")
+
+    predictions = []
+    current_sequence = tf.convert_to_tensor(last_sequence.reshape(1, 10, 1), dtype=tf.float32)
+
+    for _ in range(periods):
+        # Use model call with tensor input
+        with tf.GradientTape() as tape:  # Ensure tensor operations are tracked
+            next_pred = model(current_sequence, training=False)
+        if next_pred.shape[1] != 1 or tf.rank(next_pred) != 2:
+            logger.error(f"Invalid prediction output shape: {next_pred.shape}")
+            raise ValueError("Model prediction returned invalid output shape")
+        pred_value = next_pred.numpy()[0][0]  # Convert to numpy for safety
+        denormalized_pred = pred_value * std + mean
+        predictions.append(float(denormalized_pred))
+
+        # Update the sequence for the next prediction
+        current_sequence = tf.roll(current_sequence, shift=-1, axis=1)
+        current_sequence = tf.tensor_scatter_nd_update(current_sequence, [[0, 9, 0]], [pred_value])
+
+    logger.info(f"Predictions (denormalized): {predictions}")
+    return predictions
+
+
+def get_historical_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.95) -> List[
+    Dict[str, Any]]:
+    """
+    Calculate historical Value at Risk (VaR) for the portfolio returns over time.
+
+    Validations:
+    - At least look_back + 1 returns data points are required.
+    - Returns must be numeric and non-zero variance for sorting.
+
+    Args:
+        db: Database session
+        portfolio_id: ID of the portfolio
+        look_back: Number of past periods to use for VaR calculation (default 250)
+        confidence_level: Confidence level for VaR (default 0.95 for 95%)
+
+    Returns:
+        List of {'date': str, 'var': float} for each period after the look_back.
+    """
+    portfolio_data = get_portfolio_weighted_returns(db, portfolio_id)
+    returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
+
+    # Validation: Check if enough data
+    if len(returns) < look_back + 1:
+        raise ValueError(f"Insufficient returns data: {len(returns)} available, need at least {look_back + 1}")
+
+    # Validation: Check if returns are numeric
+    if not all(isinstance(r, (int, float)) for r in returns):
+        raise ValueError("Returns data contains non-numeric values")
+
+    # Validation: Check for zero variance
+    if np.std(returns) == 0:
+        raise ValueError("Returns data has zero variance; cannot calculate VaR")
+
+    var_data = []
+    dates = [datetime.strptime(item['date'], '%Y-%m-%d').date() for item in portfolio_data['portfolio_returns']]
+
+    for i in range(look_back, len(returns)):
+        past_returns = returns[i - look_back:i]
+        sorted_returns = np.sort(past_returns)
+        var_index = int((1 - confidence_level) * len(sorted_returns))
+        var = sorted_returns[var_index]  # Historical VaR (negative value indicates potential loss)
+        var_data.append({
+            'date': dates[i].strftime('%Y-%m-%d'),
+            'var': float(var)
+        })
+
+    return var_data
+
+
+
+def get_parametric_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.95) -> List[
+    Dict[str, Any]]:
+    """
+    Calculate parametric Value at Risk (VaR) for the portfolio returns over time, assuming normal distribution.
+
+    Validations:
+    - At least look_back + 1 returns data points are required.
+    - Returns must be numeric and non-zero variance for std calculation.
+    - Check for normal distribution assumption if needed (optional, but log warning if std == 0).
+
+    Args:
+        db: Database session
+        portfolio_id: ID of the portfolio
+        look_back: Number of past periods to use for VaR calculation (default 250)
+        confidence_level: Confidence level for VaR (default 0.95 for 95%)
+
+    Returns:
+        List of {'date': str, 'var': float} for each period after the look_back.
+    """
+    portfolio_data = get_portfolio_weighted_returns(db, portfolio_id)
+    returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
+
+    # Validation: Check if enough data
+    if len(returns) < look_back + 1:
+        raise ValueError(f"Insufficient returns data: {len(returns)} available, need at least {look_back + 1}")
+
+    # Validation: Check if returns are numeric
+    if not all(isinstance(r, (int, float)) for r in returns):
+        raise ValueError("Returns data contains non-numeric values")
+
+    # Calculate z-score for confidence level (one-tailed for VaR)
+    z_score = norm.ppf(1 - confidence_level)
+
+    var_data = []
+    dates = [datetime.strptime(item['date'], '%Y-%m-%d').date() for item in portfolio_data['portfolio_returns']]
+
+    for i in range(look_back, len(returns)):
+        past_returns = returns[i - look_back:i]
+        mean = np.mean(past_returns)
+        std = np.std(past_returns)
+
+        # Validation: Check for zero std
+        if std == 0:
+            logger.warning(f"Zero standard deviation for window ending at {dates[i]}, skipping VaR calculation")
+            continue
+
+        var = mean + z_score * std  # Parametric VaR (negative indicates loss)
+        var_data.append({
+            'date': dates[i].strftime('%Y-%m-%d'),
+            'var': float(var)
+        })
+
+    return var_data
+
+from xml.etree import ElementTree as ET
+import json
+
+def parse_trades_file(content: str, file_type: str) -> List[Dict[str, Any]]:
+    """Parse JSON or XML content into trades data with validations."""
+    trades_data = []
+    if file_type == 'json':
+        try:
+            trades_data = json.loads(content)
+            if not isinstance(trades_data, list):
+                raise ValueError("JSON must be a list of trade objects")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format: {str(e)}")
+    elif file_type == 'xml':
+        try:
+            root = ET.fromstring(content)
+            if root.tag != 'trades':
+                raise ValueError("XML root must be <trades>")
+            for trade_elem in root.findall('trade'):
+                trade = {}
+                for child in trade_elem:
+                    trade[child.tag] = child.text
+                trades_data.append(trade)
+        except ET.ParseError as e:
+            raise ValueError(f"Invalid XML format: {str(e)}")
+    else:
+        raise ValueError("Unsupported file type. Must be JSON or XML")
+
+    # Validations for each trade
+    required_fields = ["position_id", "instrument_type", "instrument_name", "asset_class", "currency", "notional", "market_value"]
+    numeric_fields = ["notional", "market_value", "delta", "volatility", "gamma", "vega", "theta", "rho"]
+    for trade in trades_data:
+        # Check required fields
+        missing = [f for f in required_fields if f not in trade or not trade[f]]
+        if missing:
+            raise ValueError(f"Missing required fields in trade: {missing}")
+
+        # Check numeric fields
+        for field in numeric_fields:
+            if field in trade:
+                try:
+                    trade[field] = float(trade[field])
+                except ValueError:
+                    raise ValueError(f"Invalid numeric value for {field} in trade: {trade[field]}")
+            else:
+                trade[field] = 0.0  # Default to 0 if missing optional numeric fields
+
+    return trades_data
+
+
+def delete_historical_data_by_ticker(db: Session, ticker: str) -> Dict[str, int]:
+    """Delete historical data for a specific ticker with validation."""
+    if not ticker or not isinstance(ticker, str):
+        raise ValueError("Ticker must be a non-empty string")
+
+    # Validate ticker exists before deletion
+    existing_data = db.query(HistoricalPrice).filter(HistoricalPrice.instrument == ticker).first()
+    if not existing_data:
+        raise ValueError(f"No historical data found for ticker: {ticker}")
+
+    # Perform deletion
+    deleted_count = db.query(HistoricalPrice).filter(HistoricalPrice.instrument == ticker).delete()
+    db.commit()
+    logger.info(f"Deleted {deleted_count} historical data entries for ticker: {ticker}")
+    return {"deleted_count": deleted_count}

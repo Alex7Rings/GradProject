@@ -1,3 +1,5 @@
+scipy
+yfinance
 python-jose
 pydantic
 fastapi
@@ -9,3 +11,4 @@ streamlit
 requests
 passlib[bcrypt]
 python-multipart
+tensorflow
