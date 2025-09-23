@@ -1,10 +1,13 @@
+from enum import Enum
+
 import numpy as np
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Path
-from sqlalchemy.orm import Session
+from sqlalchemy import column, text
+from sqlalchemy.orm import Session, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 
 import csv, io
 
@@ -13,7 +16,8 @@ from crud.crud import (
     get_trades, bulk_upsert_trades,
     bulk_upsert_historical_prices, get_historical_prices,
     delete_historical_prices, get_ticker_returns, get_portfolio_weighted_returns,
-    fetch_yahoo_historical, logger, train_lstm_model, predict_lstm_returns, parse_trades_file
+    fetch_yahoo_historical, logger, train_lstm_model, predict_lstm_returns, parse_trades_file,
+    delete_historical_data_by_ticker
 )
 from models.models import Trade, HistoricalPrice
 from schemas.schemas import UserCreate, UserOut, TradeOut, HistoricalPriceOut
@@ -390,10 +394,50 @@ def delete_historical_data_endpoint(
     if not current_user.portfolio:
         raise HTTPException(status_code=400, detail="No portfolio found")
 
+    # Normalize ticker (replace '_' with '/' to match database)
+    ticker = ticker.replace("_", "/")
+
     try:
         result = delete_historical_data_by_ticker(db, ticker)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+# Update routers.py (add endpoint)
+from crud.crud import get_portfolio_trades_grouped
+
+
+# Define Enum for group_by options
+class GroupBy(str, Enum):
+    INSTRUMENT_TYPE = "instrument_type"
+    INSTRUMENT_NAME = "instrument_name"
+
+# ... (other code in routers.py remains unchanged)
+
+@router.get("/users/me/trades/grouped", response_model=Dict[str, List[Dict[str, Any]]])
+def get_grouped_trades_endpoint(
+    group_by: str = Query(text("instrument_type")),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Get trades grouped by instrument_type or instrument_name for the current user's portfolio.
+    """
+    # Check if user has a portfolio
+    if not getattr(current_user, "portfolio", None):
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    # Validate group_by parameter
+    valid_group_by = ["instrument_type", "instrument_name"]
+    if group_by not in valid_group_by:
+        raise HTTPException(status_code=400, detail=f"group_by must be one of {valid_group_by}")
+
+    try:
+        grouped_trades = get_portfolio_trades_grouped(db, current_user.portfolio.id, group_by)
+        return grouped_trades
+    except Exception as e:
+        # Log e if needed
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")

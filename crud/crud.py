@@ -777,13 +777,37 @@ def delete_historical_data_by_ticker(db: Session, ticker: str) -> Dict[str, int]
     if not ticker or not isinstance(ticker, str):
         raise ValueError("Ticker must be a non-empty string")
 
-    # Validate ticker exists before deletion
-    existing_data = db.query(HistoricalPrice).filter(HistoricalPrice.instrument == ticker).first()
-    if not existing_data:
-        raise ValueError(f"No historical data found for ticker: {ticker}")
+    # Normalize ticker format if needed (adjust based on your data format)
+    ticker = ticker.replace("_", " ")  # Convert underscores to spaces to match database format
 
-    # Perform deletion
+    # Perform deletion and get count in single operation
     deleted_count = db.query(HistoricalPrice).filter(HistoricalPrice.instrument == ticker).delete()
     db.commit()
+
+    # Validate deletion result
+    if deleted_count == 0:
+        logger.warning(f"No historical data found for ticker: {ticker}")
+        raise ValueError(f"No historical data found for ticker: {ticker}")
+
     logger.info(f"Deleted {deleted_count} historical data entries for ticker: {ticker}")
     return {"deleted_count": deleted_count}
+
+def get_portfolio_trades_grouped(db: Session, portfolio_id: int, group_by: str = 'instrument_type') -> Dict[str, List[Dict[str, Any]]]:
+    """Get portfolio trades grouped by instrument_type or instrument_name."""
+    # Validate group_by to prevent invalid attributes
+    valid_fields = ['instrument_type', 'instrument_name']
+    if group_by not in valid_fields:
+        raise ValueError(f"Invalid group_by field: {group_by}. Must be one of {valid_fields}")
+
+    # Fetch all trades for the portfolio
+    trades = db.query(Trade).filter(Trade.portfolio_id == portfolio_id).all()
+
+    grouped = defaultdict(list)
+    for trade in trades:
+        # Use getattr safely; default to 'Unknown' if attribute missing
+        key = getattr(trade, group_by, 'Unknown')
+        # Convert ORM object to dict, excluding private attributes
+        trade_dict = {k: v for k, v in trade.__dict__.items() if not k.startswith('_')}
+        grouped[key].append(trade_dict)
+
+    return dict(grouped)

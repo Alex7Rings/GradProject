@@ -4,17 +4,32 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8b0b42fb-305d-4fd3-8f95-db31b9b50a5f" name="Changes" comment="Data handling + UI">
+    <list default="true" id="8b0b42fb-305d-4fd3-8f95-db31b9b50a5f" name="Changes" comment="Var Logic">
+      <change afterPath="$PROJECT_DIR$/Home.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/Delete_Historical_data.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/Grouped_Portfolio.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/Historical_Prices_&amp;_Returns.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/LSTM_Predictions.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/Parametric_VaR.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pages/Portfolio_Weighted_Returns.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crud/crud.py" beforeDir="false" afterPath="$PROJECT_DIR$/crud/crud.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/models/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/portfolio.db" beforeDir="false" afterPath="$PROJECT_DIR$/portfolio.db" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/routers/routers.py" beforeDir="false" afterPath="$PROJECT_DIR$/routers/routers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ui.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -84,7 +99,8 @@
       <workItem from="1758270919956" duration="7065000" />
       <workItem from="1758525109580" duration="4530000" />
       <workItem from="1758532181076" duration="6969000" />
-      <workItem from="1758550438218" duration="1900000" />
+      <workItem from="1758550438218" duration="2019000" />
+      <workItem from="1758610038378" duration="6647000" />
     </task>
     <task id="LOCAL-00001" summary="Data handling + UI">
       <option name="closed" value="true" />
@@ -94,7 +110,15 @@
       <option name="project" value="LOCAL" />
       <updated>1758271075509</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Var Logic">
+      <option name="closed" value="true" />
+      <created>1758553417520</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1758553417520</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -102,6 +126,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Data handling + UI" />
-    <option name="LAST_COMMIT_MESSAGE" value="Data handling + UI" />
+    <MESSAGE value="Var Logic" />
+    <option name="LAST_COMMIT_MESSAGE" value="Var Logic" />
   </component>
 </project>
