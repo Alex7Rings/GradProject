@@ -5,6 +5,9 @@ from Home import api_get, api_delete  # Import from Home.py
 
 st.title("Delete Historical Data by Ticker")
 
+# Improved structure with columns
+col1, col2 = st.columns([3, 1])
+
 if "token" in st.session_state and st.session_state.token:
     # Fetch available tickers from trades and historical prices, excluding derivatives
     available_tickers = set()
@@ -45,22 +48,24 @@ if "token" in st.session_state and st.session_state.token:
     available_tickers = sorted([t for t in available_tickers if t])
 
     if available_tickers:
-        selected_ticker = st.selectbox("Select Underlying Ticker to Delete Historical Data", available_tickers)
-        if st.button(f"Delete Historical Data for {selected_ticker}"):
-            # Normalize ticker for URL (replace '/' with '_')
-            normalized_ticker = selected_ticker.replace("/", "_")
-            try:
-                response = api_delete(f"/users/me/historical_data/{normalized_ticker}")
-                if response.status_code == 200:
-                    st.success(f"Deleted {response.json()['deleted_count']} historical data entries for {selected_ticker}")
-                else:
-                    try:
-                        error_detail = response.json().get('detail', 'Unknown error')
-                    except ValueError:
-                        error_detail = "Failed to parse server response"
-                    st.error(f"Failed to delete historical data for {selected_ticker}: {error_detail}")
-            except requests.RequestException as e:
-                st.error(f"Network error while deleting data for {selected_ticker}: {str(e)}")
+        with col1:
+            selected_ticker = st.selectbox("Select Underlying Ticker to Delete Historical Data", available_tickers)
+        with col2:
+            if st.button(f"Delete", key="delete_button"):
+                # Normalize ticker for URL (replace '/' with '_')
+                normalized_ticker = selected_ticker.replace("/", "_")
+                try:
+                    response = api_delete(f"/users/me/historical_data/{normalized_ticker}")
+                    if response.status_code == 200:
+                        st.success(f"Deleted {response.json()['deleted_count']} historical data entries for {selected_ticker}")
+                    else:
+                        try:
+                            error_detail = response.json().get('detail', 'Unknown error')
+                        except ValueError:
+                            error_detail = "Failed to parse server response"
+                        st.error(f"Failed to delete historical data for {selected_ticker}: {error_detail}")
+                except requests.RequestException as e:
+                    st.error(f"Network error while deleting data for {selected_ticker}: {str(e)}")
     else:
         st.warning("No underlying tickers available to delete historical data. Ensure trades or historical prices are uploaded.")
 else:

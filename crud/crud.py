@@ -304,7 +304,7 @@ logger = logging.getLogger(__name__)
 
 def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, Any]:
     """
-    Calculate weighted portfolio log returns based on valid underlyings.
+    Calculate weighted portfolio returns based on valid underlyings.
 
     A position is valid if its underlying:
     - Has historical data.
@@ -312,14 +312,20 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
     - No gaps >10 days between consecutive data points.
     - Data spans at least 365 days.
 
-    Weights use market_value; for derivatives, exposure is market_value * delta.
+    Weights are based on delta-adjusted notional exposure: for each underlying,
+    exposure = sum(delta * notional) over positions on that underlying.
+    For non-derivatives (e.g., stocks), assume notional == market_value and delta == 1.
+    For derivatives (e.g., options), notional represents the underlying value controlled,
+    and the position return is approximated as (delta * notional / market_value) * underlying_return,
+    but aggregated at underlying level for efficiency.
+
     Only valid positions contribute to total_mv and returns.
     Excluded are underlyings without valid data.
 
     Returns:
         {
             'excluded_tickers': List[str],  # Invalid underlyings
-            'portfolio_returns': List[Dict[str, Any]]  # [{'date': str, 'weighted_return': float, 'instrument': str}, ...]
+            'portfolio_returns': List[Dict[str, Any]]  # [{'date': str, 'weighted_return': float}, ...]
         }
     """
     trades = get_trades(db, portfolio_id)
@@ -382,7 +388,8 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
     total_mv = 0.0
     for underlying in valid_underlyings:
         for trade in underlying_to_trades[underlying]:
-            total_mv += trade.market_value or 0.0
+            if trade.market_value:
+                total_mv += trade.market_value
 
     if total_mv == 0:
         logger.warning("Total market value is zero, no returns calculated")
@@ -392,8 +399,9 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
     for underlying in valid_underlyings:
         exposure = 0.0
         for trade in underlying_to_trades[underlying]:
-            delta_factor = trade.delta if trade.delta is not None else 1.0
-            exposure += (trade.market_value or 0.0) * delta_factor
+            delta = trade.delta if trade.delta is not None else 1.0
+            notional = trade.notional if trade.notional is not None else (trade.market_value or 0.0)
+            exposure += delta * notional
         effective_weights[underlying] = exposure / total_mv
 
     logger.info(f"Computed effective weights: {effective_weights}")
@@ -427,22 +435,20 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
             if prev_close is None or curr_close is None or prev_close == 0:
                 all_have_data = False
                 break
-            ret = np.log(curr_close / prev_close)
+            ret = (curr_close - prev_close) / prev_close
             weighted_ret += weight * ret
 
         if all_have_data:
             portfolio_returns.append({
                 'date': curr_date.strftime('%Y-%m-%d'),
-                'weighted_return': float(weighted_ret),
-                'instrument': next(iter(prices_by_underlying[underlying]))[0].strftime('%Y-%m-%d')  # Placeholder, adjust if needed
+                'weighted_return': float(weighted_ret)
             })
 
-    logger.info(f"Computed {len(portfolio_returns)} portfolio log return periods with instruments")
+    logger.info(f"Computed {len(portfolio_returns)} portfolio return periods")
     return {
         'excluded_tickers': excluded_underlyings,
         'portfolio_returns': portfolio_returns
     }
-
 
 def get_trades_by_instrument_type(db: Session, portfolio_id: int, instrument_type: str) -> list[type[Trade]]:
     """
