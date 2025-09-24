@@ -1,10 +1,11 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = "http://backend:8000"
 
 # -------------------- Session --------------------
 if "token" not in st.session_state:
