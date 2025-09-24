@@ -320,34 +320,36 @@ def get_ticker_returns(db: Session, portfolio_id: int, ticker: str) -> List[floa
 
 def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, Any]:
     """
-    Optimized portfolio weighted returns:
-     - Load trades once
-     - Identify underlyings
-     - Load all relevant price rows with a single query
-     - Build dicts and compute vectorized returns per underlying
-     - Align dates and compute weighted returns
+    Calculate portfolio weighted returns for assets and derivatives:
+    - Single query for trades
+    - Single query for prices
+    - Vectorized returns calculation
+    - Proper delta-adjusted weights for derivatives
+    - Robust date alignment
     """
+    # Get trades
     trades = get_trades(db, portfolio_id)
     if not trades:
+        logger.info("No trades found for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': [], 'portfolio_returns': []}
 
-    # Map underlying -> trades and collect unique underlyings
+    # Map trades to underlyings
     underlying_to_trades: Dict[str, List[Trade]] = defaultdict(list)
     underlyings = set()
-    for t in trades:
-        if not getattr(t, "instrument_name", None):
+    for trade in trades:
+        instrument_name = getattr(trade, "instrument_name", None)
+        if not instrument_name:
+            logger.warning("Trade missing instrument_name: %s", trade)
             continue
-        u = get_underlying(t.instrument_name)
-        underlying_to_trades[u].append(t)
-        underlyings.add(u)
+        underlying = get_underlying(instrument_name)
+        underlying_to_trades[underlying].append(trade)
+        underlyings.add(underlying)
 
-    current_year = date.today().year
-    excluded_underlyings = []
-    valid_underlyings = []
-
-    # Load ALL price rows for these underlyings in one query
     if not underlyings:
+        logger.info("No valid underlyings found for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': [], 'portfolio_returns': []}
+
+    # Load prices in one query
     price_rows = (
         db.query(HistoricalPrice)
         .filter(HistoricalPrice.instrument.in_(list(underlyings)))
@@ -355,122 +357,133 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
         .all()
     )
 
-    # Build per-underlying list of (date, close)
+    # Organize prices by underlying
     prices_by_underlying: Dict[str, List[Tuple[date, float]]] = defaultdict(list)
     for pr in price_rows:
-        if pr.close is not None:
-            prices_by_underlying[pr.instrument].append((pr.date, pr.close))
+        if pr.close is not None and pr.close > 0:  # Ensure valid prices
+            prices_by_underlying[pr.instrument].append((pr.date, float(pr.close)))
 
     # Validate underlyings
-    for u in list(underlyings):
-        pr_list = prices_by_underlying.get(u, [])
-        if not pr_list:
-            excluded_underlyings.append(u)
-            logger.warning(f"No historical data for underlying: {u}")
+    current_year = date.today().year
+    excluded_underlyings = []
+    valid_underlyings = []
+
+    for underlying in underlyings:
+        price_list = prices_by_underlying.get(underlying, [])
+        if not price_list:
+            logger.warning("No price data for underlying: %s", underlying)
+            excluded_underlyings.append(underlying)
             continue
-        # check current year presence
-        if not any(d.year == current_year for d, _ in pr_list):
-            excluded_underlyings.append(u)
-            logger.warning(f"No current year data for underlying: {u}")
+
+        # Sort prices by date
+        price_list.sort(key=lambda x: x[0])
+
+        # Check data requirements
+        has_current_year = any(d.year == current_year for d, _ in price_list)
+        if not has_current_year:
+            logger.warning("No current year data for underlying: %s", underlying)
+            excluded_underlyings.append(underlying)
             continue
-        # check gaps and span days
-        pr_list.sort(key=lambda x: x[0])
-        gap_ok = True
-        for i in range(1, len(pr_list)):
-            if (pr_list[i][0] - pr_list[i-1][0]).days > 10:
-                gap_ok = False
-                break
-        if not gap_ok:
-            excluded_underlyings.append(u)
-            logger.warning(f"Gap > 10 days found for underlying: {u}")
+
+        # Check data gaps
+        dates = [d for d, _ in price_list]
+        gaps = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
+        if any(gap > 10 for gap in gaps):
+            logger.warning("Large data gaps (>10 days) for underlying: %s", underlying)
+            excluded_underlyings.append(underlying)
             continue
-        span_days = (pr_list[-1][0] - pr_list[0][0]).days
+
+        # Check data span
+        span_days = (dates[-1] - dates[0]).days
         if span_days < 365:
-            excluded_underlyings.append(u)
-            logger.warning(f"Data span < 365 days for underlying: {u}")
+            logger.warning("Data span < 365 days for underlying: %s", underlying)
+            excluded_underlyings.append(underlying)
             continue
-        valid_underlyings.append(u)
-        # ensure sorted stored
-        prices_by_underlying[u] = pr_list
+
+        valid_underlyings.append(underlying)
+        prices_by_underlying[underlying] = price_list
 
     if not valid_underlyings:
-        logger.warning("No valid underlyings found for portfolio")
+        logger.warning("No valid underlyings after validation for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
 
-    # Compute total market value (only valid_underlyings contribute)
+    # Calculate total market value and effective weights
     total_mv = 0.0
-    for u in valid_underlyings:
-        for t in underlying_to_trades[u]:
-            mv = getattr(t, "market_value", None) or 0.0
-            total_mv += float(mv)
+    exposures: Dict[str, float] = defaultdict(float)
 
-    if total_mv == 0:
-        logger.warning("Total market value is zero, no returns calculated")
+    for underlying in valid_underlyings:
+        for trade in underlying_to_trades[underlying]:
+            market_value = float(getattr(trade, "market_value", 0.0) or 0.0)
+            delta = float(getattr(trade, "delta", 1.0) or 1.0)
+            notional = float(getattr(trade, "notional", market_value) or market_value)
+            # Delta-adjusted exposure for derivatives
+            exposure = delta * notional
+            exposures[underlying] += exposure
+            total_mv += market_value
+
+    if abs(total_mv) < 1e-10:  # Avoid division by zero
+        logger.warning("Total market value near zero for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
 
-    # effective_weights: exposure / total_mv
-    effective_weights: Dict[str, float] = {}
-    for u in valid_underlyings:
-        exposure = 0.0
-        for t in underlying_to_trades[u]:
-            delta = float(getattr(t, "delta", 1.0) or 1.0)
-            notional = float(getattr(t, "notional", None) or getattr(t, "market_value", 0.0) or 0.0)
-            exposure += delta * notional
-        effective_weights[u] = exposure / total_mv
+    # Calculate weights
+    weights = {u: exposures[u] / total_mv for u in valid_underlyings}
+    logger.info("Effective weights: %s", weights)
 
-    logger.info(f"Computed effective weights: {effective_weights}")
-
-    # Build date-indexed close arrays per underlying (use dict date->close)
-    date_sets = set()
-    closes_by_underlying = {}
-    for u in valid_underlyings:
-        pr_list = prices_by_underlying[u]
-        # pr_list already sorted
-        date_arr = [d for d, _ in pr_list]
-        close_arr = np.array([c for _, c in pr_list], dtype=np.float64)
-        closes_by_underlying[u] = (date_arr, close_arr)
-        date_sets.update(date_arr)
-
-    # Use union of all dates, sorted
-    sorted_dates = sorted(date_sets)
-    if len(sorted_dates) < 2:
+    # Align prices across dates
+    all_dates = sorted(set().union(*(set(d for d, _ in prices_by_underlying[u])
+                                     for u in valid_underlyings)))
+    if len(all_dates) < 2:
+        logger.warning("Insufficient date range for returns calculation")
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
 
-    # Build a lookup of date->index for each underlying for O(1) access
-    indices_by_underlying = {}
-    for u in valid_underlyings:
-        dates_u = closes_by_underlying[u][0]
-        indices_by_underlying[u] = {d: idx for idx, d in enumerate(dates_u)}
+    # Create aligned price arrays
+    aligned_prices = {}
+    for underlying in valid_underlyings:
+        price_dict = dict(prices_by_underlying[underlying])
+        prices = []
+        for d in all_dates:
+            price = price_dict.get(d)
+            if price is None:
+                # Forward-fill missing prices
+                last_price = prices[-1] if prices else price_dict[min(price_dict.keys())]
+                prices.append(last_price)
+            else:
+                prices.append(price)
+        aligned_prices[underlying] = np.array(prices, dtype=np.float64)
 
+    # Calculate returns
     portfolio_returns = []
+    prev_prices = {u: aligned_prices[u][:-1] for u in valid_underlyings}
+    curr_prices = {u: aligned_prices[u][1:] for u in valid_underlyings}
 
-    # Iterate consecutive date pairs and compute weighted returns
-    for i in range(1, len(sorted_dates)):
-        prev_date = sorted_dates[i-1]
-        curr_date = sorted_dates[i]
-        weighted_ret = 0.0
-        all_have_data = True
+    # Vectorized returns calculation
+    for i in range(len(all_dates) - 1):
+        curr_date = all_dates[i + 1]
+        weighted_return = 0.0
+        valid_data = True
 
-        for u, weight in effective_weights.items():
-            idx_map = indices_by_underlying[u]
-            if prev_date not in idx_map or curr_date not in idx_map:
-                all_have_data = False
+        for underlying in valid_underlyings:
+            prev_price = prev_prices[underlying][i]
+            curr_price = curr_prices[underlying][i]
+
+            if prev_price < 1e-10:  # Avoid division by zero
+                valid_data = False
                 break
-            idx_prev = idx_map[prev_date]
-            idx_curr = idx_map[curr_date]
-            prev_close = closes_by_underlying[u][1][idx_prev]
-            curr_close = closes_by_underlying[u][1][idx_curr]
-            if prev_close == 0:
-                all_have_data = False
-                break
-            ret = (curr_close - prev_close) / prev_close
-            weighted_ret += weight * ret
 
-        if all_have_data:
-            portfolio_returns.append({'date': curr_date.strftime('%Y-%m-%d'), 'weighted_return': float(weighted_ret)})
+            ret = (curr_price - prev_price) / prev_price
+            weighted_return += weights[underlying] * ret
 
-    logger.info(f"Computed {len(portfolio_returns)} portfolio return periods")
-    return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': portfolio_returns}
+        if valid_data:
+            portfolio_returns.append({
+                'date': curr_date.strftime('%Y-%m-%d'),
+                'weighted_return': float(weighted_return)
+            })
+
+    logger.info("Computed %d portfolio return periods", len(portfolio_returns))
+    return {
+        'excluded_tickers': excluded_underlyings,
+        'portfolio_returns': portfolio_returns
+    }
 
 
 def get_trades_by_instrument_type(db: Session, portfolio_id: int, instrument_type: str) -> list[type[Trade]]:
