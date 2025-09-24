@@ -17,7 +17,8 @@ from crud.crud import (
     bulk_upsert_historical_prices, get_historical_prices,
     delete_historical_prices, get_ticker_returns, get_portfolio_weighted_returns,
     fetch_yahoo_historical, logger, train_lstm_model, predict_lstm_returns, parse_trades_file,
-    delete_historical_data_by_ticker
+    delete_historical_data_by_ticker, get_portfolio_covariance, backtest_historical_var, get_portfolio_weights,
+    parse_trade_data
 )
 from models.models import Trade, HistoricalPrice
 from schemas.schemas import UserCreate, UserOut, TradeOut, HistoricalPriceOut
@@ -296,7 +297,7 @@ def train_lstm_endpoint(
         logger.info(f"Model type passed to prediction: {type(model)}")
 
         last_sequence = np.array(returns[-10:], dtype=np.float32)
-        predictions = predict_lstm_returns(model, last_sequence, 60, mean, std)
+        predictions = predict_lstm_returns(model, last_sequence, 15, mean, std)
 
         return {
             "status": "success",
@@ -357,29 +358,33 @@ def get_parametric_var_endpoint(
 
 from fastapi import UploadFile, File
 
+
 @router.post("/users/me/trades/upload_json_xml")
-def upload_json_xml_trades(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+def upload_trades_json_xml(
+        data: Dict[str, Any],
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
 ):
     """
-    Upload JSON or XML file to add trades to the portfolio with validations.
+    Upload trades via JSON or XML content.
+    Expects body: {"content": {...trade_data... or "<trade>...</trade>"}, "format": "json" or "xml"}
     """
     if not current_user.portfolio:
         raise HTTPException(status_code=400, detail="No portfolio found")
 
-    content = file.file.read().decode("utf-8")
-    file_type = file.filename.split('.')[-1].lower()
-    if file_type not in ['json', 'xml']:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Must be .json or .xml")
+    content = data.get("content")
+    format = data.get("format")
+    if not content or not format:
+        raise HTTPException(status_code=400, detail="Missing content or format")
 
     try:
-        trades_data = parse_trades_file(content, file_type)
+        trades_data = parse_trade_data(content, format)
         result = bulk_upsert_trades(db, current_user.portfolio.id, trades_data)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 @router.delete("/users/me/historical_data/{ticker}")
@@ -440,4 +445,61 @@ def get_grouped_trades_endpoint(
         return grouped_trades
     except Exception as e:
         # Log e if needed
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+@router.get("/users/me/covariance_matrix", response_model=Dict[str, Any])
+def get_covariance_matrix(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Get the covariance matrix of asset returns for the current user's portfolio.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        cov_data = get_portfolio_covariance(db, current_user.portfolio.id)
+        return cov_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.get("/users/me/backtest_historical_var", response_model=Dict[str, Any])
+def backtest_historical_var_endpoint(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Backtest Historical VaR for the current user's portfolio.
+    Returns violation count, ratio, and detailed results.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        backtest_data = backtest_historical_var(db, current_user.portfolio.id)
+        return backtest_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.get("/users/me/portfolio_weights", response_model=Dict[str, Any])
+def get_portfolio_weights_endpoint(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Get the weight of each underlying asset in the current user's portfolio based on market value.
+    """
+    if not current_user.portfolio:
+        raise HTTPException(status_code=400, detail="No portfolio found")
+
+    try:
+        weights_data = get_portfolio_weights(db, current_user.portfolio.id)
+        return weights_data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")

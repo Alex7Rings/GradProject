@@ -30,6 +30,9 @@ with tab1:
                     hist_dates = [datetime.strptime(item['date'], '%Y-%m-%d') for item in
                                   hist_data.get('portfolio_returns', [])]
                     if hist_dates:
+                        # Take only the last 40 days of historical data
+                        hist_returns = hist_returns[-40:]  # Slice last 40 returns
+                        hist_dates = hist_dates[-40:]      # Slice last 40 dates
                         last_date = hist_dates[-1]
                         pred_dates = [(last_date + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in
                                       range(len(predictions))]
@@ -50,7 +53,7 @@ with tab1:
                             color=alt.Color('type:N', scale=alt.Scale(domain=['Historical', 'Predicted'], range=['blue', 'red'])),
                             tooltip=['date', 'returns', 'type']
                         ).properties(
-                            title="Historical and Predicted Portfolio Returns"
+                            title="Last 40 Days of Historical and Predicted Portfolio Returns"
                         ).interactive()
 
                         st.altair_chart(chart, use_container_width=True)

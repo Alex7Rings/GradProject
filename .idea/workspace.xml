@@ -5,18 +5,19 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8b0b42fb-305d-4fd3-8f95-db31b9b50a5f" name="Changes" comment="Var Logic">
-      <change afterPath="$PROJECT_DIR$/pages/Dashboard.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Backend.docker" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Frontend.docker" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crud/crud.py" beforeDir="false" afterPath="$PROJECT_DIR$/crud/crud.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pages/Delete_Historical_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Delete_Historical_data.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pages/Grouped_Portfolio.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pages/Historical_Prices_&amp;_Returns.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Historical_Prices_&amp;_Returns.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pages/Dashboard.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Dashboard.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pages/Historical_VaR.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Historical_VaR.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pages/LSTM_Predictions.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/LSTM_Predictions.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pages/Parametric_VaR.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Parametric_VaR.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pages/Portfolio_Weighted_Returns.py" beforeDir="false" afterPath="$PROJECT_DIR$/pages/Portfolio_Weighted_Returns.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/portfolio.db" beforeDir="false" afterPath="$PROJECT_DIR$/portfolio.db" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/practical_nb (3).ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/practical_nb (3).ipynb" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/routers/routers.py" beforeDir="false" afterPath="$PROJECT_DIR$/routers/routers.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

@@ -1,3 +1,5 @@
+plotly
+altair
 scipy
 yfinance
 python-jose

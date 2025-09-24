@@ -22,9 +22,12 @@ if "token" in st.session_state and st.session_state.token:
             num_asset_classes = df_trades['asset_class'].nunique()
             num_instruments = df_trades['instrument_type'].nunique()
 
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2 = st.columns(2)
             col1.metric("Total Market Value", f"${total_mv:,.2f}")
             col2.metric("Total Notional", f"${total_notional:,.2f}")
+
+            # Second row: other metrics
+            col3, col4, col5 = st.columns(3)
             col3.metric("Number of Positions", num_positions)
             col4.metric("Asset Classes", num_asset_classes)
             col5.metric("Instrument Types", num_instruments)
