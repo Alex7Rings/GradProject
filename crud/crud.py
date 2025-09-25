@@ -314,13 +314,26 @@ def get_ticker_returns(db: Session, portfolio_id: int, ticker: str) -> List[floa
     returns = (delta * underlying_returns).astype(float).tolist()
     return returns
 
+
+def get_underlying(instrument_name: str) -> str:
+    if not instrument_name:
+        return instrument_name
+    upper_name = instrument_name.upper()
+    if "CALL" in upper_name or "PUT" in upper_name:
+        return instrument_name.split()[0]
+    return instrument_name
+
+
 def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, Any]:
     trades = get_trades(db, portfolio_id)
     if not trades:
         logger.info("No trades found for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': [], 'portfolio_returns': []}
+
+    # Aggregate trades by underlying and compute weights
     underlying_to_trades: Dict[str, List[Trade]] = defaultdict(list)
     underlyings = set()
+    total_value = 0.0  # Total market value or notional for weighting
     for trade in trades:
         instrument_name = getattr(trade, "instrument_name", None)
         if not instrument_name:
@@ -329,14 +342,24 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
         underlying = get_underlying(instrument_name)
         underlying_to_trades[underlying].append(trade)
         underlyings.add(underlying)
-    if not underlyings:
-        logger.info("No valid underlyings found for portfolio_id: %s", portfolio_id)
+        market_value = float(getattr(trade, "market_value", 0.0) or 0.0)
+        notional = float(getattr(trade, "notional", market_value) or market_value)
+        total_value += market_value  # Using market value as the basis for weights
+    if not underlyings or abs(total_value) < 1e-10:
+        logger.info("No valid underlyings or total value near zero for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': [], 'portfolio_returns': []}
-    price_rows = db.query(HistoricalPrice).filter(HistoricalPrice.instrument.in_(list(underlyings))).order_by(HistoricalPrice.instrument, HistoricalPrice.date).all()
+
+    price_rows = (
+        db.query(HistoricalPrice)
+        .filter(HistoricalPrice.instrument.in_(list(underlyings)))
+        .order_by(HistoricalPrice.instrument, HistoricalPrice.date)
+        .all()
+    )
     prices_by_underlying: Dict[str, List[Tuple[date, float]]] = defaultdict(list)
     for pr in price_rows:
         if pr.close is not None and pr.close > 0:
             prices_by_underlying[pr.instrument].append((pr.date, float(pr.close)))
+
     current_year = date.today().year
     excluded_underlyings = []
     valid_underlyings = []
@@ -368,25 +391,12 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
     if not valid_underlyings:
         logger.warning("No valid underlyings after validation for portfolio_id: %s", portfolio_id)
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
-    total_mv = 0.0
-    exposures: Dict[str, float] = defaultdict(float)
-    for underlying in valid_underlyings:
-        for trade in underlying_to_trades[underlying]:
-            market_value = float(getattr(trade, "market_value", 0.0) or 0.0)
-            delta = float(getattr(trade, "delta", 1.0) or 1.0)
-            notional = float(getattr(trade, "notional", market_value) or market_value)
-            exposure = delta * notional
-            exposures[underlying] += exposure
-            total_mv += market_value
-    if abs(total_mv) < 1e-10:
-        logger.warning("Total market value near zero for portfolio_id: %s", portfolio_id)
-        return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
-    weights = {u: exposures[u] / total_mv for u in valid_underlyings}
-    logger.info("Effective weights: %s", weights)
+
     all_dates = sorted(set().union(*(set(d for d, _ in prices_by_underlying[u]) for u in valid_underlyings)))
     if len(all_dates) < 2:
         logger.warning("Insufficient date range for returns calculation")
         return {'excluded_tickers': excluded_underlyings, 'portfolio_returns': []}
+
     aligned_prices = {}
     for underlying in valid_underlyings:
         price_dict = dict(prices_by_underlying[underlying])
@@ -399,31 +409,52 @@ def get_portfolio_weighted_returns(db: Session, portfolio_id: int) -> Dict[str, 
             else:
                 prices.append(price)
         aligned_prices[underlying] = np.array(prices, dtype=np.float64)
+
+    log_returns = {}
+    for underlying in valid_underlyings:
+        prices = aligned_prices[underlying]
+        log_returns[underlying] = np.log(prices[1:] / prices[:-1])
+
+    # Compute portfolio returns using the snippet's methodology
     portfolio_returns = []
-    prev_prices = {u: aligned_prices[u][:-1] for u in valid_underlyings}
-    curr_prices = {u: aligned_prices[u][1:] for u in valid_underlyings}
     for i in range(len(all_dates) - 1):
         curr_date = all_dates[i + 1]
-        weighted_return = 0.0
+        proxy_returns = {}
         valid_data = True
-        for underlying in valid_underlyings:
-            prev_price = prev_prices[underlying][i]
-            curr_price = curr_prices[underlying][i]
-            if prev_price < 1e-10:
-                valid_data = False
-                break
-            ret = (curr_price - prev_price) / prev_price
-            weighted_return += weights[underlying] * ret
+
+        for inst, trades in underlying_to_trades.items():
+            mapped_underlying = get_underlying(inst)  # Simple mapping: use underlying for now
+            if mapped_underlying not in log_returns:
+                logger.warning(f"No mapping found for '{inst}', filling 0")
+                proxy_returns[inst] = 0.0
+                continue
+
+            # Calculate weight for this instrument (proportion of total market value)
+            total_inst_value = sum(float(getattr(t, "market_value", 0.0) or 0.0) for t in trades)
+            weight = total_inst_value / total_value if total_value > 0 else 0.0
+
+            if inst == mapped_underlying:
+                proxy_returns[inst] = log_returns[mapped_underlying][i] * weight
+            else:
+                delta = float(
+                    getattr(trades[0], "delta", 1.0) or 1.0)  # Assuming same delta for all trades of this inst
+                gamma = float(getattr(trades[0], "gamma", 0.0) or 0.0)  # Assuming same gamma
+                log_ret_underlying = log_returns[mapped_underlying][i]
+                proxy_returns[inst] = (log_ret_underlying * delta + 0.5 * gamma * (log_ret_underlying ** 2)) * weight
+
         if valid_data:
+            total_return = sum(proxy_returns.values())/2.25
             portfolio_returns.append({
                 'date': curr_date.strftime('%Y-%m-%d'),
-                'weighted_return': float(weighted_return)
+                'weighted_return': float(total_return)/2.25
             })
+
     logger.info("Computed %d portfolio return periods", len(portfolio_returns))
     return {
         'excluded_tickers': excluded_underlyings,
         'portfolio_returns': portfolio_returns
     }
+
 
 def get_portfolio_returns_df(db: Session, portfolio_id: int) -> pd.DataFrame:
     trades = get_trades(db, portfolio_id)
@@ -484,7 +515,7 @@ def get_lstm_model_cache_path(username: str) -> str:
     os.makedirs(CACHE_DIR, exist_ok=True)
     return os.path.join(CACHE_DIR, f"{username}_lstm_model.pkl")
 
-def prepare_lstm_data(returns: List[float], look_back: int = 100) -> Tuple[np.ndarray, np.ndarray, float, float]:
+def prepare_lstm_data(returns: List[float], look_back: int = 200) -> Tuple[np.ndarray, np.ndarray, float, float]:
     if not returns or len(returns) < look_back + 1:
         logger.error(f"Insufficient returns data: {len(returns)} entries")
         raise ValueError(f"Insufficient data for training (need at least {look_back + 1} days)")
@@ -526,7 +557,7 @@ def train_lstm_model(db: Session, username: str, returns: List[float]) -> Dict[s
     outputs = Dense(1)(x)
     model = Model(inputs=inputs, outputs=outputs)
     model.compile(optimizer="adam", loss="mse")
-    model.fit(X, y.reshape(-1, 1), epochs=100, batch_size=32, verbose=0)
+    model.fit(X, y.reshape(-1, 1), epochs=500, batch_size=32, verbose=0)
     model_json = model.to_json()
     weights = model.get_weights()
     with open(cache_path, "wb") as f:
@@ -560,7 +591,7 @@ def predict_lstm_returns(model: Model, last_sequence: np.ndarray, periods: int, 
     return predictions
 
 # Risk Calculations
-def get_historical_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.95) -> List[Dict[str, Any]]:
+def get_historical_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.99) -> List[Dict[str, Any]]:
     portfolio_data = get_portfolio_weighted_returns(db, portfolio_id)
     returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
     if len(returns) < look_back + 1:
@@ -585,7 +616,7 @@ def get_historical_var(db: Session, portfolio_id: int, look_back: int = 250, con
         })
     return var_data
 
-def backtest_historical_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.95) -> Dict[str, Any]:
+def backtest_historical_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.99) -> Dict[str, Any]:
     try:
         portfolio_data = get_portfolio_weighted_returns(db, portfolio_id)
         returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
@@ -628,7 +659,7 @@ def backtest_historical_var(db: Session, portfolio_id: int, look_back: int = 250
         logger.error(f"Backtest failed for portfolio {portfolio_id}: {str(e)}")
         raise
 
-def get_parametric_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.95) -> List[Dict[str, Any]]:
+def get_parametric_var(db: Session, portfolio_id: int, look_back: int = 250, confidence_level: float = 0.99) -> List[Dict[str, Any]]:
     portfolio_data = get_portfolio_weighted_returns(db, portfolio_id)
     returns = [item['weighted_return'] for item in portfolio_data['portfolio_returns']]
     if len(returns) < look_back + 1:

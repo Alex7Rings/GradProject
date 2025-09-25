@@ -101,21 +101,21 @@ if "token" in st.session_state and st.session_state.token:
                     df_pvar = pd.DataFrame(pvar_data)
                     last_pvar = df_pvar['var'].iloc[-1]
 
-            hvar_pct = last_hvar * 100
-            pvar_pct = last_pvar * 100
-            hvar_abs = last_hvar * total_mv
-            pvar_abs = last_pvar * total_mv
+            hvar_pct = abs(last_hvar * 100)
+            pvar_pct = abs(last_pvar * 100)
+            hvar_abs = abs(last_hvar * total_mv)
+            pvar_abs = abs(last_pvar * total_mv)
 
             col_p1, col_p2, col_p3, col_p4 = st.columns(4)
             col_p1.metric("Last Daily Return", f"{last_return:.2%}")
             col_p2.metric("Avg Daily Return", f"{avg_return:.2%}")
-            col_p3.metric("Historical VaR (95%)", f"{hvar_pct:.2f}%")
-            col_p4.metric("Parametric VaR (95%)", f"{pvar_pct:.2f}%")
+            col_p3.metric("Historical VaR (99%)", f"{hvar_pct:.2f}%")
+            col_p4.metric("Parametric VaR (99%)", f"{pvar_pct:.2f}%")
 
             st.subheader("VaR (Absolute Values in $)")
             col_v1, col_v2 = st.columns(2)
-            col_v1.metric("Historical VaR (95%)", f"${hvar_abs:,.2f}")
-            col_v2.metric("Parametric VaR (95%)", f"${pvar_abs:,.2f}")
+            col_v1.metric("Historical VaR (99%)", f"${hvar_abs:,.2f}")
+            col_v2.metric("Parametric VaR (99%)", f"${pvar_abs:,.2f}")
 
             st.subheader("Key Charts")
             col_chart1, col_chart2 = st.columns(2)

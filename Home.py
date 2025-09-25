@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = "http://localhost:8000"
 
 # -------------------- Session --------------------
 if "token" not in st.session_state:
