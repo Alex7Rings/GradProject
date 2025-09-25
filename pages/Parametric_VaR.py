@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from Home import api_get  # Import from Home.py
+from Home import api_get
 
 st.title("Parametric Value at Risk (VaR) Over Time")
 
-# Use expander for additional info
 with st.expander("About Parametric VaR"):
     st.write("This shows Parametric VaR at 95% confidence with a 250-day lookback using Normal Distribution.")
 

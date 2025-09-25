@@ -2,19 +2,17 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from Home import api_get, api_post  # Assuming this imports the necessary API functions from Home.py
+from Home import api_get, api_post
 
 st.title("Portfolio Dashboard")
 
 if "token" in st.session_state and st.session_state.token:
-    # Fetch trades
     response_trades = api_get("/users/me/trades")
     if response_trades.status_code == 200:
         trades = response_trades.json()
         if trades:
             df_trades = pd.DataFrame(trades)
 
-            # Section 1: Portfolio Summary
             st.subheader("Portfolio Summary")
             total_mv = df_trades['market_value'].sum()
             total_notional = df_trades['notional'].sum()
@@ -26,13 +24,11 @@ if "token" in st.session_state and st.session_state.token:
             col1.metric("Total Market Value", f"${total_mv:,.2f}")
             col2.metric("Total Notional", f"${total_notional:,.2f}")
 
-            # Second row: other metrics
             col3, col4, col5 = st.columns(3)
             col3.metric("Number of Positions", num_positions)
             col4.metric("Asset Classes", num_asset_classes)
             col5.metric("Instrument Types", num_instruments)
 
-            # Section 2: Allocation Charts
             st.subheader("Portfolio Allocation")
             col_alloc1, col_alloc2 = st.columns(2)
 
@@ -54,7 +50,6 @@ if "token" in st.session_state and st.session_state.token:
                 ).properties(title="By Currency")
                 st.altair_chart(chart_currency, use_container_width=True)
 
-            # Section 3: Risk Greeks
             st.subheader("Aggregated Risk Greeks")
             total_delta = df_trades['delta'].sum()
             total_gamma = df_trades['gamma'].sum()
@@ -69,10 +64,8 @@ if "token" in st.session_state and st.session_state.token:
             col_g4.metric("Total Theta", f"{total_theta:,.2f}")
             col_g5.metric("Total Rho", f"{total_rho:,.2f}")
 
-            # Section 4: Performance Metrics
             st.subheader("Performance & Risk Metrics")
 
-            # Fetch portfolio returns
             response_returns = api_get("/users/me/portfolio_returns")
             last_return = 0
             avg_return = 0
@@ -89,7 +82,6 @@ if "token" in st.session_state and st.session_state.token:
                     last_return = df_returns['weighted_return'].iloc[-1] if not df_returns.empty else 0
                     avg_return = df_returns['weighted_return'].mean()
 
-            # Fetch Historical VaR
             response_hvar = api_get("/users/me/historical_var")
             last_hvar = 0
             df_hvar = pd.DataFrame()
@@ -100,22 +92,31 @@ if "token" in st.session_state and st.session_state.token:
                     df_hvar['date'] = pd.to_datetime(df_hvar['date'])
                     last_hvar = df_hvar['var'].iloc[-1]
 
-            # Fetch Parametric VaR
             response_pvar = api_get("/users/me/parametric_var")
             last_pvar = 0
+            df_pvar = pd.DataFrame()
             if response_pvar.status_code == 200:
                 pvar_data = response_pvar.json()
                 if pvar_data:
                     df_pvar = pd.DataFrame(pvar_data)
                     last_pvar = df_pvar['var'].iloc[-1]
 
+            hvar_pct = last_hvar * 100
+            pvar_pct = last_pvar * 100
+            hvar_abs = last_hvar * total_mv
+            pvar_abs = last_pvar * total_mv
+
             col_p1, col_p2, col_p3, col_p4 = st.columns(4)
             col_p1.metric("Last Daily Return", f"{last_return:.2%}")
             col_p2.metric("Avg Daily Return", f"{avg_return:.2%}")
-            col_p3.metric("Historical VaR (95%)", f"{last_hvar:,.2f}")
-            col_p4.metric("Parametric VaR (95%)", f"{last_pvar:,.2f}")
+            col_p3.metric("Historical VaR (95%)", f"{hvar_pct:.2f}%")
+            col_p4.metric("Parametric VaR (95%)", f"{pvar_pct:.2f}%")
 
-            # Section 5: Charts
+            st.subheader("VaR (Absolute Values in $)")
+            col_v1, col_v2 = st.columns(2)
+            col_v1.metric("Historical VaR (95%)", f"${hvar_abs:,.2f}")
+            col_v2.metric("Parametric VaR (95%)", f"${pvar_abs:,.2f}")
+
             st.subheader("Key Charts")
             col_chart1, col_chart2 = st.columns(2)
 
@@ -137,7 +138,6 @@ if "token" in st.session_state and st.session_state.token:
                     ).properties(title="Historical VaR").interactive()
                     st.altair_chart(chart_hvar, use_container_width=True)
 
-            # Section 6: Excluded Tickers
             if excluded:
                 st.subheader("Excluded Tickers (Invalid Data)")
                 for exc in excluded:
@@ -150,7 +150,6 @@ if "token" in st.session_state and st.session_state.token:
                         else:
                             st.error(f"Failed to fetch for {exc}")
 
-            # Section 7: Grouped Trades
             st.subheader("Grouped Trades")
             group_by = st.selectbox("Group by", ["instrument_type", "instrument_name"], key="dash_group")
             response_grouped = api_get(f"/users/me/trades/grouped?group_by={group_by}")

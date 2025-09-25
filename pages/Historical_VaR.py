@@ -4,11 +4,10 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from Home import api_get  # Import from Home.py
+from Home import api_get
 
 st.title("Historical Value at Risk (VaR) and Expected Shortfall (ES)")
 
-# Add expander for details
 with st.expander("About Historical VaR and ES"):
     st.write("This shows Historical VaR and Expected Shortfall (ES) at 95% confidence with a 250-day lookback. "
              "VaR is the 5% quantile of returns, while ES is the average loss in the worst 5% of cases.")
@@ -21,7 +20,6 @@ if "token" in st.session_state and st.session_state.token:
             df_var = pd.DataFrame(var_data)
             df_var['date'] = pd.to_datetime(df_var['date'])
 
-            # Line chart with Plotly
             fig_line = go.Figure()
             fig_line.add_trace(go.Scatter(
                 x=df_var['date'], y=df_var['var'],
@@ -45,7 +43,6 @@ if "token" in st.session_state and st.session_state.token:
     else:
         st.error(f"Failed to fetch VaR and ES: {response_var.text}")
 
-    # Histogram of Returns (Last 250 Days)
     st.subheader("Portfolio Returns Distribution (Last 250 Days)")
     with st.expander("About Returns Histogram"):
         st.write("This histogram shows the distribution of the last 250 daily portfolio returns "

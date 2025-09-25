@@ -1,22 +1,19 @@
 import streamlit as st
 import requests
 
-from Home import api_get, api_delete  # Import from Home.py
+from Home import api_get, api_delete
 
 st.title("Delete Historical Data by Ticker")
 
-# Improved structure with columns
 col1, col2 = st.columns([3, 1])
 
 if "token" in st.session_state and st.session_state.token:
-    # Fetch available tickers from trades and historical prices, excluding derivatives
     available_tickers = set()
 
     def is_underlying(ticker: str) -> bool:
         """Check if ticker is an underlying (not a derivative like CALL or PUT)."""
         return not any(keyword in ticker.upper() for keyword in ["CALL", "PUT"])
 
-    # Get tickers from trades
     try:
         response_trades = api_get("/users/me/trades")
         if response_trades.status_code == 200:
@@ -30,7 +27,6 @@ if "token" in st.session_state and st.session_state.token:
     except requests.RequestException as e:
         st.warning(f"Error fetching trades: {str(e)}")
 
-    # Get tickers from historical prices
     try:
         response_historical = api_get("/historical/all")
         if response_historical.status_code == 200:
@@ -44,7 +40,6 @@ if "token" in st.session_state and st.session_state.token:
     except requests.RequestException as e:
         st.warning(f"Error fetching historical prices: {str(e)}")
 
-    # Filter out empty strings and sort
     available_tickers = sorted([t for t in available_tickers if t])
 
     if available_tickers:
