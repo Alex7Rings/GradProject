@@ -29,7 +29,6 @@ if "token" in st.session_state and st.session_state.token:
 
                             df_hist['date'] = pd.to_datetime(df_hist['date'])
 
-                            # Use Altair for OHLC time series
                             chart_ohlc = alt.Chart(df_hist).mark_line().encode(
                                 x=alt.X('date:T', title='Date'),
                                 y=alt.Y('value:Q', title='Price'),
@@ -62,7 +61,6 @@ if "token" in st.session_state and st.session_state.token:
                                         'returns': returns
                                     })
 
-                                    # Use Altair for returns chart
                                     chart_returns = alt.Chart(df_returns).mark_line(color='green', interpolate='basis').encode(
                                         x=alt.X('date:T', title='Date'),
                                         y=alt.Y('returns:Q', title='Daily Return'),

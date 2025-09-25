@@ -2,16 +2,14 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from Home import api_get, api_post  # Import from Home.py
+from Home import api_get, api_post
 
 st.title("Portfolio Weighted Returns and Asset Weights")
 
-# Add expander for details
 with st.expander("About Portfolio Weighted Returns and Weights"):
     st.write("This page shows the weighted returns of the portfolio over time, based on trade deltas and underlying returns. You can fetch historical price data from Yahoo Finance for underlyings with invalid data. The weight of each underlying asset is also displayed, calculated as the market value of each underlying divided by the total portfolio market value.")
 
 if "token" in st.session_state and st.session_state.token:
-    # Portfolio Returns Chart
     response = api_get("/users/me/portfolio_returns")
     if response.status_code == 200:
         data = response.json()
@@ -39,7 +37,6 @@ if "token" in st.session_state and st.session_state.token:
             df_port = pd.DataFrame(portfolio_returns)
             df_port['date'] = pd.to_datetime(df_port['date'])
 
-            # Use Altair for line chart, keeping old version's styling
             chart = alt.Chart(df_port).mark_line(interpolate='basis', color='green').encode(
                 x=alt.X('date:T', title='Date'),
                 y=alt.Y('weighted_return:Q', title='Weighted Daily Return'),
@@ -74,7 +71,6 @@ if "token" in st.session_state and st.session_state.token:
             df_weights['weight_pct'] = df_weights['weight'] * 100  # Convert to percentage
             st.write(f"**Total Portfolio Market Value**: ${weights_data['total_market_value']:.2f}")
 
-            # Display weights table
             st.write("**Weights Table**")
             st.dataframe(
                 df_weights[['underlying', 'weight_pct', 'market_value']].style.format({
@@ -84,7 +80,6 @@ if "token" in st.session_state and st.session_state.token:
                 use_container_width=True
             )
 
-            # Pie chart for weights
             pie_chart = alt.Chart(df_weights).mark_arc().encode(
                 theta=alt.Theta('weight_pct:Q', title='Weight (%)'),
                 color=alt.Color('underlying:N', title='Underlying'),

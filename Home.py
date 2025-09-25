@@ -2,11 +2,9 @@ import os
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.express as px
-from datetime import datetime, timedelta
+
 
 API_URL = "http://backend:8000"
-
 # -------------------- Session --------------------
 if "token" not in st.session_state:
     st.session_state.token = None
@@ -60,7 +58,6 @@ else:
 st.title("Portfolio Overview")
 
 if st.session_state.token:
-    # ----- Upload Portfolio CSV -----
     st.subheader("Upload Portfolio CSV")
     portfolio_files = st.file_uploader("Select portfolio CSV files", type=["csv"], key="portfolio", accept_multiple_files=True)
     if portfolio_files:

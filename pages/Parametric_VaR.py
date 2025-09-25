@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from Home import api_get  # Import from Home.py
+from Home import api_get
 
 st.title("Parametric Value at Risk (VaR) Over Time")
 
-# Use expander for additional info
 with st.expander("About Parametric VaR"):
-    st.write("This shows Parametric VaR at 95% confidence with a 250-day lookback using Normal Distribution.")
+    st.write("This shows Parametric VaR at 99% confidence with a 250-day lookback using Normal Distribution.")
 
 if "token" in st.session_state and st.session_state.token:
     response_param_var = api_get("/users/me/parametric_var")
@@ -24,7 +23,7 @@ if "token" in st.session_state and st.session_state.token:
                 y=alt.Y('var:Q', title='VaR'),
                 tooltip=['date', 'var']
             ).properties(
-                title="Parametric VaR (95% Confidence, 250-Day Lookback, Normal Distribution)"
+                title="Parametric VaR (99% Confidence, 250-Day Lookback, Normal Distribution)"
             ).interactive()
 
             st.altair_chart(chart, use_container_width=True)

@@ -3,11 +3,10 @@ import pandas as pd
 import altair as alt
 from datetime import datetime, timedelta
 
-from Home import api_post, api_get  # Import from Home.py
+from Home import api_post, api_get
 
 st.title("LSTM Prediction on Portfolio Returns")
 
-# Use tabs for structure
 tab1, tab2 = st.tabs(["Predict", "About"])
 
 with tab2:
@@ -30,13 +29,11 @@ with tab1:
                     hist_dates = [datetime.strptime(item['date'], '%Y-%m-%d') for item in
                                   hist_data.get('portfolio_returns', [])]
                     if hist_dates:
-                        # Take only the last 40 days of historical data
                         hist_returns = hist_returns[-40:]  # Slice last 40 returns
                         hist_dates = hist_dates[-40:]      # Slice last 40 dates
                         last_date = hist_dates[-1]
                         pred_dates = [(last_date + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in
                                       range(len(predictions))]
-                        # Combine historical and predicted
                         all_dates = [d.strftime('%Y-%m-%d') for d in hist_dates] + pred_dates
                         all_returns = hist_returns + predictions
                         df_plot = pd.DataFrame({
@@ -46,7 +43,6 @@ with tab1:
                         })
                         df_plot['date'] = pd.to_datetime(df_plot['date'])
 
-                        # Use Altair for line chart
                         chart = alt.Chart(df_plot).mark_line(interpolate='basis').encode(
                             x=alt.X('date:T', title='Date'),
                             y=alt.Y('returns:Q', title='Returns'),
